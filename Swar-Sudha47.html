@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Swar Sudha</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: white;
+    color: black;
+    text-align: center;
+    padding: 20px;
+}
+
+h1 {
+    color: darkorange;
+}
+
+button {
+    font-size: 18px;
+    padding: 10px 25px;
+    margin: 15px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+#startBtn { background: #28a745; color: white; }
+#stopBtn { background: #dc3545; color: white; }
+
+.display { margin-top: 20px; font-size: 22px; }
+.value { font-size: 28px; color: #0077cc; }
+.status { font-size: 24px; }
+.hint { color: #555; font-size: 18px; }
+</style>
+</head>
+
+<body>
+
+<h1>🎵 Swar Sudha 🎵</h1>
+
+<button id="startBtn">Start</button>
+<button id="stopBtn">Stop</button>
+
+<div class="display">
+    <p>Frequency (Hz): <span class="value" id="hz">--</span></p>
+    <p>Scale: <span class="value" id="note">--</span></p>
+    <p>Scale Point (1–10): <span class="value" id="point">--</span></p>
+    <p class="status" id="status">--</p>
+    <p class="hint" id="hint">Waiting…</p>
+</div>
+
+<script>
+let audioContext, analyser, mic;
+let running = false;
+let lastFreq = null, stableCount = 0;
+
+let calibration = true;
+let calibStart = 0;
+let collectedFreqs = [];
+let baseScale = null;
+
+const hzEl = document.getElementById("hz");
+const noteEl = document.getElementById("note");
+const pointEl = document.getElementById("point");
+const statusEl = document.getElementById("status");
+const hintEl = document.getElementById("hint");
+
+const scales = [
+  { name: "Sa", freq: 261.63 },
+  { name: "Re", freq: 293.66 },
+  { name: "Ga", freq: 329.63 },
+  { name: "Ma", freq: 349.23 },
+  { name: "Pa", freq: 392.00 },
+  { name: "Dha", freq: 440.00 },
+  { name: "Ni", freq: 493.88 }
+];
+
+document.getElementById("startBtn").onclick = async () => {
+  if (running) return;
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Microphone not supported in this browser.");
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+
+    mic = audioContext.createMediaStreamSource(stream);
+    mic.connect(analyser);
+
+    running = true;
+    calibration = true;
+    collectedFreqs = [];
+    baseScale = null;
+    calibStart = Date.now();
+    hintEl.textContent = "Listening first 7 seconds…";
+
+    detect();
+
+  } catch (err) {
+    alert("Please allow microphone permission.");
+  }
+};
+
+document.getElementById("stopBtn").onclick = () => {
+  if (!running) return;
+  audioContext.close();
+  running = false;
+  reset();
+};
+
+function reset() {
+  hzEl.textContent = "--";
+  noteEl.textContent = "--";
+  pointEl.textContent = "--";
+  statusEl.textContent = "--";
+  hintEl.textContent = "Stopped";
+}
+
+function detect() {
+  if (!running) return;
+
+  const buffer = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buffer);
+  const freq = autoCorrelate(buffer, audioContext.sampleRate);
+
+  if (freq === -1 || freq < 70 || freq > 700) {
+    stableCount = 0;
+    lastFreq = null;
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  if (lastFreq && Math.abs(freq - lastFreq) < 3) stableCount++;
+  else stableCount = 0;
+
+  lastFreq = freq;
+  if (stableCount < 6) {
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  if (calibration) {
+    collectedFreqs.push(freq);
+    if (Date.now() - calibStart >= 7000) {
+      const avg = collectedFreqs.reduce((a,b)=>a+b,0) / collectedFreqs.length;
+      baseScale = closestScale(avg);
+      calibration = false;
+      hintEl.textContent = "Scale detected ✔";
+    }
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  hzEl.textContent = freq.toFixed(2);
+  noteEl.textContent = baseScale.name;
+
+  const diff = freq - baseScale.freq;
+  const point = Math.min(10, Math.max(1, 5 + (diff / 5)));
+  pointEl.textContent = point.toFixed(1);
+
+  if (Math.abs(diff) < 1) {
+    statusEl.textContent = "Perfect ✔";
+    statusEl.style.color = "green";
+  } else if (diff > 0) {
+    statusEl.textContent = "Sharp ▲";
+    st
