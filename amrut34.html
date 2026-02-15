@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Amrut Tabla Tunner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: #111;
+    color: #fff;
+    text-align: center;
+    padding: 20px;
+}
+h1 { color: #f4c430; }
+
+button {
+    font-size: 18px;
+    padding: 10px 25px;
+    margin: 15px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+#startBtn { background: #28a745; color: white; }
+#stopBtn { background: #dc3545; color: white; }
+
+.display { margin-top: 20px; font-size: 22px; }
+.value { font-size: 28px; color: #00e5ff; }
+.status { font-size: 24px; }
+.hint { color: #888; font-size: 18px; }
+</style>
+</head>
+
+<body>
+
+<h1>🎵 Amrut Tabla Tunner 🎵</h1>
+
+<button id="startBtn">Start</button>
+<button id="stopBtn">Stop</button>
+
+<div class="display">
+    <p>Frequency (Hz): <span class="value" id="hz">--</span></p>
+    <p>Scale: <span class="value" id="note">--</span></p>
+    <p>Scale Point (1–10): <span class="value" id="point">--</span></p>
+    <p class="status" id="status">--</p>
+    <p class="hint" id="hint">Waiting…</p>
+</div>
+
+<script>
+let audioContext, analyser, mic;
+let running = false;
+let lastFreq = null, stableCount = 0;
+
+let calibration = true;
+let calibStart = 0;
+let collectedFreqs = [];
+let baseScale = null;
+
+const hzEl = document.getElementById("hz");
+const noteEl = document.getElementById("note");
+const pointEl = document.getElementById("point");
+const statusEl = document.getElementById("status");
+const hintEl = document.getElementById("hint");
+
+const scales = [
+  { name: "Sa", freq: 261.63 },
+  { name: "Re", freq: 293.66 },
+  { name: "Ga", freq: 329.63 },
+  { name: "Ma", freq: 349.23 },
+  { name: "Pa", freq: 392.00 },
+  { name: "Dha", freq: 440.00 },
+  { name: "Ni", freq: 493.88 }
+];
+
+document.getElementById("startBtn").onclick = async () => {
+  if (running) return;
+  running = true;
+  calibration = true;
+  collectedFreqs = [];
+  baseScale = null;
+  calibStart = Date.now();
+  hintEl.textContent = "Listening first 7 seconds…";
+
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mic = audioContext.createMediaStreamSource(stream);
+  mic.connect(analyser);
+
+  detect();
+};
+
+document.getElementById("stopBtn").onclick = () => {
+  if (!running) return;
+  audioContext.close();
+  running = false;
+  reset();
+};
+
+function reset() {
+  hzEl.textContent = "--";
+  noteEl.textContent = "--";
+  pointEl.textContent = "--";
+  statusEl.textContent = "--";
+  hintEl.textContent = "Stopped";
+}
+
+function detect() {
+  if (!running) return;
+
+  const buffer = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buffer);
+  const freq = autoCorrelate(buffer, audioContext.sampleRate);
+
+  if (freq === -1 || freq < 70 || freq > 700) {
+    stableCount = 0;
+    lastFreq = null;
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  if (lastFreq && Math.abs(freq - lastFreq) < 3) stableCount++;
+  else stableCount = 0;
+
+  lastFreq = freq;
+  if (stableCount < 6) {
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  // Calibration phase
+  if (calibration) {
+    collectedFreqs.push(freq);
+    if (Date.now() - calibStart >= 7000) {
+      const avg = collectedFreqs.reduce((a,b)=>a+b,0) / collectedFreqs.length;
+      baseScale = closestScale(avg);
+      calibration = false;
+      hintEl.textContent = "Scale detected ✔";
+    }
+    requestAnimationFrame(detect);
+    return;
+  }
+
+  // Normal tuning phase
+  hzEl.textContent = freq.toFixed(2);
+  noteEl.textContent = baseScale.name;
+
+  const diff = freq - baseScale.freq;
+  const point = Math.min(10, Math.max(1, 5 + (diff / 5)));
+  pointEl.textContent = point.toFixed(1);
+
+  if (Math.abs(diff) < 1) {
+    statusEl.textContent = "Perfect ✔";
+    statusEl.style.color = "#00ff00";
+  } else if (diff > 0) {
+    statusEl.textContent = "Sharp ▲";
+    statusEl.style.color = "#ff9800";
+  } else {
+    statusEl.textContent = "Flat ▼";
+    statusEl.style.color = "#ff5252";
+  }
+
+  requestAnimationFrame(detect);
+}
+
+function closestScale(freq) {
+  return scales.reduce((a,b)=>
+    Math.abs(b.freq - freq) < Math.abs(a.freq - freq) ? b : a
+  );
+}
+
+function autoCorrelate(buf, rate) {
+  let rms = 0;
+  for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+  rms = Math.sqrt(rms / buf.length);
+  if (rms < 0.015) return -1;
+
+  let c = new Array(buf.length).fill(0);
+  for (let i = 0; i < buf.length; i++)
+    for (let j = 0; j < buf.length - i; j++)
+      c[i] += buf[j] * buf[j + i];
+
+  let d = 0;
+  while (c[d] > c[d + 1]) d++;
+
+  let max = -1, pos = -1;
+  for (let i = d; i < buf.length; i++)
+    if (c[i] > max) { max = c[i]; pos = i; }
+
+  return rate / pos;
+}
+</script>
+
+</body>
+</html>
